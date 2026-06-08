@@ -1,11 +1,13 @@
 // ============================================================
-// 搜索 v7.6 — B站双搜(专栏+视频)·字典黑名单·自动引号·16引擎
-//专栏其实爬不到正文，不过能爬到标题和评论也还行吧。
-//爬取到的资源均来自网络,版权争议与该脚本无关。
-//所有爬取均遵守robots规则，不是api就是robots允许爬取（截止至2026.6.7）
-//© 2026 梅影寒窗。允许个人使用、修改、分发。严禁出售及商业用途。（除非我自己做了集成软件）
-//关注B站梅影寒窗谢谢喵
+// 搜索 v7.7 — B站双搜(专栏+视频)·字典黑名单·自动引号·16引擎
+// 新改动：对于能力较差的模型，直接增加了限制搜索三条的硬性规则，并feedback来提醒ai越矩调整
+// 专栏其实爬不到正文，不过能爬到标题和评论也还行吧。
+// 爬取到的资源均来自网络,版权争议与该脚本无关。
+// 所有爬取均遵守robots规则，不是api就是robots允许爬取（截止至2026.6.7）
+// © 2026 梅影寒窗。允许个人使用、修改、分发。严禁出售及商业用途。（除非我自己做了集成软件）
+// 关注B站梅影寒窗谢谢喵
 // ============================================================
+
 var console = typeof console !== 'undefined' ? console : { warn: function(){}, log: function(){}, error: function(){} };
 
 var CONFIG = {
@@ -60,6 +62,17 @@ function detectGameWikis(q) {
     if (q.indexOf(key) !== -1 && key.length > bestLen) { best = GAME_WIKI[key]; bestLen = key.length; }
   }
   return best;
+}
+
+// ========== 硬性 ≤3 关键词 ==========
+// 用户绝对规则："绝不超过 3 个关键词"。AI 会把它当建议忽略，所以脚本层强制执行。
+// 按空白切词，超过 3 个只保留前 3 个（贴合 <游戏> <角色> <限定> 模板——重要词在前），
+// 其余记入 dropped 字段反馈给 AI。纯 CJK 连写（无空格）无法可靠切分，原样返回。
+var MAX_KEYWORDS = 3;
+function capKeywords(q) {
+  var toks = q.split(/\s+/).filter(Boolean);
+  if (toks.length <= MAX_KEYWORDS) return { q: q, dropped: [] };
+  return { q: toks.slice(0, MAX_KEYWORDS).join(" "), dropped: toks.slice(MAX_KEYWORDS) };
 }
 
 // ========== 垃圾小游戏站（@game 中文搜常被污染） ==========
@@ -461,6 +474,12 @@ function resolve(q) {
     q = q.replace(am[0], "").replace(/\s+/g, " ").trim();
   }
 
+  // ★ 关键词硬卡：用户规则"绝不超过 3 个词"。脚本层强制，AI 无法绕过。
+  //   在 @game 裁剪之前执行，游戏名（模板里的首词）必然保留，detectGameWikis 仍正常工作。
+  var capped = capKeywords(q);
+  q = capped.q;
+  var droppedKw = capped.dropped;
+
   var r = ROUTES[tag] || DEF;
   var order = r.o;
 
@@ -485,7 +504,7 @@ function resolve(q) {
   for (var i = 0; i < order.length; i++)
     for (var j = 0; j < CONFIG.engines.length; j++)
       if (CONFIG.engines[j].name === order[i]) { engs.push(CONFIG.engines[j]); break; }
-  return { engines: engs, query: q, routeTag: tag, minEngines: r.min };
+  return { engines: engs, query: q, routeTag: tag, minEngines: r.min, droppedKeywords: droppedKw };
 }
 
 // ========== 主搜索 ==========
@@ -526,6 +545,8 @@ function search(query, resultSize) {
 
   var result = { items: dedup.slice(0, resultSize), query: q, routeTag: tag||"default", total: dedup.length };
   if (totalDictFiltered >= 3) result.dictPolluted = true;  // ★ v7.5: 污染信号
+  // ★ 关键词被硬卡时反馈：让 AI 看到自己超了词、哪些被丢，下次自觉收敛。
+  if (r.droppedKeywords && r.droppedKeywords.length) result.droppedKeywords = r.droppedKeywords;
 
   return result;
 }
